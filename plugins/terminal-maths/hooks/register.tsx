@@ -20,10 +20,15 @@ const MATHS_GUIDANCE = [
   'Write a literal dollar sign as \\$ in any reply that also contains maths.',
 ].join(' ')
 
+// A drive letter or a slash first, so an empty or relative value cannot put
+// the file at the drive root or inside the project.
+const ABSOLUTE_PATH = /^(?:[A-Za-z]:)?[\\/]/
+
 type TypesetLocation = { readonly home: string; readonly path: string }
 
 async function typesetLocation($: EngineInterface): Promise<TypesetLocation | undefined> {
-  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  const candidates = [await $.env.get('USERPROFILE'), await $.env.get('HOME')]
+  const home = candidates.find(value => value !== undefined && ABSOLUTE_PATH.test(value))
   if (home === undefined) return undefined
   return { home, path: `${home.replaceAll('\\', '/')}/${TYPESET_FILE}` }
 }
@@ -78,7 +83,7 @@ export const register: Register = on => {
     const answer = await read($, lastAnswer)
     if (answer === '') return { text: 'There is no reply to typeset yet.' }
     const location = await typesetLocation($)
-    if (location === undefined) return { text: 'Cannot typeset: neither USERPROFILE nor HOME is set.' }
+    if (location === undefined) return { text: 'Cannot typeset: neither USERPROFILE nor HOME holds an absolute path.' }
     const { home, path } = location
     await $.fs.write(path, answer)
     const isWindows = (await $.env.get('OS')) === 'Windows_NT'

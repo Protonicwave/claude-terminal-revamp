@@ -171,6 +171,22 @@ test('without a home folder a reply writes nothing and raises no toast', async (
   expect(toasts).toEqual([])
 })
 
+test('an empty USERPROFILE falls back to HOME', async ($, on) => {
+  const { files } = stubEngine(on, { USERPROFILE: '', HOME })
+
+  await $.turn.complete({ ...TURN, answer: 'Reply.' })
+
+  expect([...files]).toEqual([[LATEST, 'Reply.']])
+})
+
+test('a relative home folder is not used', async ($, on) => {
+  const { files } = stubEngine(on, { HOME: 'someone' })
+
+  await $.turn.complete({ ...TURN, answer: 'Reply.' })
+
+  expect(files.size).toBe(0)
+})
+
 test('/typeset before any reply says so', async $ => {
   const result = await $.command.run(TYPESET)
   expect(result.text).toBe('There is no reply to typeset yet.')
