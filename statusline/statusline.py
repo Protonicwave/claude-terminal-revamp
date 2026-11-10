@@ -19,13 +19,9 @@ NARROW_COLUMNS_LIMIT = 60
 BAR_CELLS = 10
 AMBER_PERCENT = 60
 RED_PERCENT = 85
-FIVE_HOUR_PERCENT_KEYS = (
-    "used_percentage",
-    "used_percent",
-    "utilization",
-    "percentage",
-    "percent",
-)
+# The documented payload names only `rate_limits.five_hour`, not its fields,
+# so the plausible spellings are tried in order.
+FIVE_HOUR_PERCENT_KEYS = ("used_percentage", "used_percent", "utilization")
 MILLION = 1_000_000
 THOUSAND = 1_000
 
@@ -153,7 +149,7 @@ def read_git_state(directory: str) -> GitState | None:
     try:
         # Fixed argument list with git resolved from PATH, so S603 and S607 do not apply.
         result = subprocess.run(  # noqa: S603
-            ["git", "-C", directory, "status", "--porcelain=v2", "--branch"],  # noqa: S607
+            ["git", "--no-optional-locks", "-C", directory, "status", "--porcelain=v2", "--branch"],  # noqa: S607
             capture_output=True,
             stdin=subprocess.DEVNULL,
             timeout=GIT_TIMEOUT_SECONDS,

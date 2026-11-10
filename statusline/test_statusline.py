@@ -295,7 +295,7 @@ def test_git_failure_omits_git_segment(monkeypatch, capsys, clean_repo, error):
     assert plain(output) == "◆ Claude  │  project\n"
 
 
-def test_git_is_called_once_with_a_timeout(monkeypatch, capsys, clean_repo):
+def test_git_takes_no_index_lock_and_has_a_timeout(monkeypatch, capsys, clean_repo):
     calls = []
     real_run = subprocess.run
 
@@ -305,7 +305,12 @@ def test_git_is_called_once_with_a_timeout(monkeypatch, capsys, clean_repo):
 
     monkeypatch.setattr(subprocess, "run", record)
     run(monkeypatch, capsys, {"workspace": {"current_dir": str(clean_repo)}})
-    assert calls == [(["git", "-C", str(clean_repo), "status", "--porcelain=v2", "--branch"], 0.5)]
+    # --no-optional-locks keeps a status refresh from holding .git/index.lock
+    # while the user commits.
+    command = [
+        "git", "--no-optional-locks", "-C", str(clean_repo), "status", "--porcelain=v2", "--branch"
+    ]
+    assert calls == [(command, 0.5)]
 
 
 @pytest.mark.parametrize(("columns", "line_count"), [("59", 1), ("0", 1), ("60", 2), ("200", 2)])
