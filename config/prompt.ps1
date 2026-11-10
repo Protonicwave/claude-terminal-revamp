@@ -34,6 +34,8 @@ function Get-ClaudeWarmBranch {
             $head = Join-Path $marker 'HEAD'
         } elseif (Test-Path -LiteralPath $marker -PathType Leaf) {
             $pointer = (Get-Content -LiteralPath $marker -TotalCount 1) -replace '^gitdir:\s*', ''
+            # A submodule's pointer is relative to the folder holding the .git file.
+            if (-not [IO.Path]::IsPathRooted($pointer)) { $pointer = Join-Path $directory $pointer }
             $head = Join-Path $pointer 'HEAD'
         } else {
             $directory = Split-Path -Parent $directory
@@ -41,6 +43,7 @@ function Get-ClaudeWarmBranch {
         }
         if (-not (Test-Path -LiteralPath $head)) { return $null }
         $reference = Get-Content -LiteralPath $head -TotalCount 1
+        if (-not $reference) { return $null }
         if ($reference -match '^ref: refs/heads/(.+)$') { return $Matches[1] }
         return $reference.Substring(0, [Math]::Min(7, $reference.Length))
     }
