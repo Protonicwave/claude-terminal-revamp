@@ -9,6 +9,8 @@ START_MARKER = "# >>> claude-terminal-revamp >>>"
 END_MARKER = "# <<< claude-terminal-revamp <<<"
 BOM = b"\xef\xbb\xbf"
 
+_START_PATTERN = re.compile(rf"^{re.escape(START_MARKER)}", re.MULTILINE)
+_END_PATTERN = re.compile(rf"^{re.escape(END_MARKER)}", re.MULTILINE)
 _BLOCK_PATTERN = re.compile(
     rf"^{re.escape(START_MARKER)}.*?^{re.escape(END_MARKER)}[^\r\n]*(?P<terminator>\r\n|\n)?",
     re.MULTILINE | re.DOTALL,
@@ -45,11 +47,34 @@ def _render_block(script_path: str, eol: str) -> str:
     return eol.join([START_MARKER, f". '{quoted}'", END_MARKER])
 
 
-def insert_block(text: str, script_path: str) -> tuple[str, bool]:
-    """Insert or replace the block. The flag says whether a line break was added before it."""
+def _find_block(text: str, label: str) -> re.Match[str] | None:
+    """Return the marked block, or None when neither marker is present.
+
+    Anything other than one start marker followed by one end marker is refused, so no line
+    outside a well-formed block is ever replaced or removed.
+    """
+    starts = len(_START_PATTERN.findall(text))
+    ends = len(_END_PATTERN.findall(text))
+    if starts == 0 and ends == 0:
+        return None
+    match = _BLOCK_PATTERN.search(text)
+    if starts == 1 and ends == 1 and match:
+        return match
+    raise InstallerError(
+        f"{label} holds {starts} start marker(s) and {ends} end marker(s) of the "
+        f"claude-terminal-revamp block, not one start followed by one end. "
+        f"Fix the markers in {label} by hand, then run again."
+    )
+
+
+def insert_block(text: str, script_path: str, label: str) -> tuple[str, bool]:
+    """Insert or replace the block. The flag says whether a line break was added before it.
+
+    Raises InstallerError, naming label, when the markers are not one well-ordered pair.
+    """
     eol = _line_ending(text)
     block = _render_block(script_path, eol)
-    match = _BLOCK_PATTERN.search(text)
+    match = _find_block(text, label)
     if match:
         terminator = match.group("terminator") or ""
         return text[: match.start()] + block + terminator + text[match.end() :], False
@@ -57,8 +82,9 @@ def insert_block(text: str, script_path: str) -> tuple[str, bool]:
     return text + lead + block + eol, bool(lead)
 
 
-def remove_block(text: str, leading_break_added: bool) -> str:
-    match = _BLOCK_PATTERN.search(text)
+def remove_block(text: str, leading_break_added: bool, label: str) -> str:
+    """Remove the block. Raises InstallerError, naming label, on damaged markers."""
+    match = _find_block(text, label)
     if not match:
         return text
     before, after = text[: match.start()], text[match.end() :]

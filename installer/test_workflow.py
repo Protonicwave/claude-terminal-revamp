@@ -1,11 +1,13 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from installer.actions import ThemeWrite, write_themes
 from installer.conftest import Sandbox
 from installer.installing import install
-from installer.model import Report
+from installer.model import Environment, InstallerError, Report
 from installer.profile import BOM, END_MARKER, START_MARKER
 from installer.uninstalling import uninstall
 
@@ -14,6 +16,12 @@ SET_POLICY = "Set-ExecutionPolicy"
 
 def text_of(report: Report) -> str:
     return "\n".join(report.lines)
+
+
+def refusal(action: Callable[[Environment], Report], env: Environment) -> str:
+    with pytest.raises(InstallerError) as raised:
+        action(env)
+    return str(raised.value)
 
 
 def profile_block(sandbox: Sandbox, eol: str) -> bytes:
@@ -108,7 +116,7 @@ def test_install_preserves_existing_values_and_backs_up_each_file(sandbox: Sandb
     vscode = sandbox.read_json(sandbox.vscode)
     assert vscode["editor.fontSize"] == 12
     assert vscode["terminal.integrated.fontSize"] == 14
-    assert '\n  "editor.fontSize"' in sandbox.vscode.read_text(encoding="utf-8")
+    assert '\n    "editor.fontSize"' in sandbox.vscode.read_text(encoding="utf-8")
     claude_text = sandbox.claude.read_text(encoding="utf-8")
     assert '\n    "model": "opus"' in claude_text
     assert claude_text.endswith("}\n")
@@ -164,11 +172,10 @@ def test_a_settings_file_with_comments_stops_the_run_and_changes_nothing(
     broken.parent.mkdir(parents=True)
     broken.write_text('{\n  // a comment\n  "a": 1,\n}\n', encoding="utf-8")
 
-    report = install(sandbox.env())
+    message = refusal(install, sandbox.env())
 
-    assert report.exit_code == 2
-    assert str(broken) in text_of(report)
-    assert "line 2" in text_of(report)
+    assert str(broken) in message
+    assert "line 2" in message
     assert not other.exists()
     assert not sandbox.state.exists()
     assert not sandbox.themes.exists()
@@ -182,10 +189,9 @@ def test_a_conflicting_theme_file_stops_the_run_before_any_write(sandbox: Sandbo
     theme.parent.mkdir(parents=True)
     theme.write_text('{"mine": true}', encoding="utf-8")
 
-    report = install(sandbox.env())
+    message = refusal(install, sandbox.env())
 
-    assert report.exit_code == 2
-    assert "claude-warm.json" in text_of(report)
+    assert "claude-warm.json" in message
     assert theme.read_text(encoding="utf-8") == '{"mine": true}'
     assert not sandbox.vscode.exists()
     assert not sandbox.claude.exists()
@@ -195,16 +201,13 @@ def test_a_conflicting_theme_file_stops_the_run_before_any_write(sandbox: Sandbo
 
 def test_a_missing_repository_config_file_stops_the_run(sandbox: Sandbox) -> None:
     (sandbox.repository / "config" / "claude.json").unlink()
-    report = install(sandbox.env())
-    assert report.exit_code == 2
-    assert "claude.json is missing" in text_of(report)
+    assert "claude.json is missing" in refusal(install, sandbox.env())
 
 
 def test_a_profile_that_is_not_utf8_stops_the_run(sandbox: Sandbox) -> None:
     sandbox.profile.parent.mkdir(parents=True)
     sandbox.profile.write_bytes(b"\xff\xfe\x00")
-    report = install(sandbox.env())
-    assert report.exit_code == 2
+    refusal(install, sandbox.env())
     assert not sandbox.state.exists()
     assert not sandbox.vscode.exists()
 
@@ -212,8 +215,8 @@ def test_a_profile_that_is_not_utf8_stops_the_run(sandbox: Sandbox) -> None:
 def test_a_damaged_state_file_stops_install_and_uninstall(sandbox: Sandbox) -> None:
     sandbox.state.parent.mkdir(parents=True)
     sandbox.state.write_text('{"version": 9}', encoding="utf-8")
-    assert install(sandbox.env()).exit_code == 2
-    assert uninstall(sandbox.uninstall_env()).exit_code == 2
+    refusal(install, sandbox.env())
+    refusal(uninstall, sandbox.uninstall_env())
     assert sandbox.state.read_text(encoding="utf-8") == '{"version": 9}'
 
 
@@ -347,8 +350,7 @@ def test_uninstall_notes_a_profile_that_has_gone(sandbox: Sandbox) -> None:
 def test_uninstall_refuses_a_profile_that_is_not_utf8(sandbox: Sandbox) -> None:
     install(sandbox.env())
     sandbox.profile.write_bytes(b"\xff\xfe\x00")
-    report = uninstall(sandbox.uninstall_env())
-    assert report.exit_code == 2
+    refusal(uninstall, sandbox.uninstall_env())
     assert sandbox.state.exists()
 
 
@@ -438,6 +440,31 @@ def test_a_failed_policy_restore_is_reported(sandbox: Sandbox) -> None:
     report = uninstall(sandbox.uninstall_env())
     assert report.exit_code == 1
     assert "locked" in text_of(report)
+    assert "--uninstall again" in text_of(report)
+    assert sandbox.read_json(sandbox.state) == {
+        "version": 1,
+        "vscode": [],
+        "claude": [],
+        "themes": {},
+        "previous_execution_policy": "Restricted",
+        "profile": None,
+        "plugin": {"marketplace_added": False, "installed": False},
+    }
+
+
+def test_a_rerun_after_a_failed_policy_restore_retries_only_that_step(sandbox: Sandbox) -> None:
+    install(sandbox.env())
+    sandbox.runner.respond(SET_POLICY, returncode=1, stderr="locked")
+    uninstall(sandbox.uninstall_env())
+    sandbox.runner.respond(SET_POLICY, returncode=0)
+    sandbox.runner.calls.clear()
+
+    report = uninstall(sandbox.uninstall_env())
+
+    assert report.exit_code == 0
+    assert sandbox.runner.commands() == [
+        "powershell -NoProfile -Command Set-ExecutionPolicy Restricted -Scope CurrentUser -Force"
+    ]
     assert not sandbox.state.exists()
 
 
@@ -483,15 +510,33 @@ def test_uninstall_removes_the_plugin_then_the_marketplace(sandbox: Sandbox) -> 
     ]
 
 
-def test_a_failing_plugin_uninstall_is_reported_and_the_state_is_still_deleted(
-    sandbox: Sandbox,
-) -> None:
+def test_a_failing_plugin_uninstall_is_reported_and_kept_in_the_state(sandbox: Sandbox) -> None:
     install(sandbox.env())
     sandbox.runner.respond("plugin uninstall", returncode=1, stderr="nope")
     report = uninstall(sandbox.uninstall_env())
     assert report.exit_code == 1
     assert "nope" in text_of(report)
     assert "Removed the marketplace" in text_of(report)
+    assert "--uninstall again" in text_of(report)
+    state = sandbox.read_json(sandbox.state)
+    assert state["plugin"] == {"marketplace_added": False, "installed": True}
+    assert state["previous_execution_policy"] is None
+
+
+def test_a_failing_marketplace_removal_is_kept_in_the_state_and_retried(
+    sandbox: Sandbox,
+) -> None:
+    install(sandbox.env())
+    sandbox.runner.respond("marketplace remove", returncode=1, stderr="busy")
+    report = uninstall(sandbox.uninstall_env())
+    assert report.exit_code == 1
+    plugin = sandbox.read_json(sandbox.state)["plugin"]
+    assert plugin == {"marketplace_added": True, "installed": False}
+
+    sandbox.runner.respond("marketplace remove", returncode=0)
+    sandbox.runner.calls.clear()
+    assert uninstall(sandbox.uninstall_env()).exit_code == 0
+    assert sandbox.runner.commands() == ["claude plugin marketplace remove claude-terminal-revamp"]
     assert not sandbox.state.exists()
 
 
@@ -551,9 +596,8 @@ def test_uninstall_refuses_settings_that_are_not_strict_json_and_changes_nothing
     sandbox.claude.write_text('{\n  "a": 1,\n}\n', encoding="utf-8")
     sandbox.runner.calls.clear()
 
-    report = uninstall(sandbox.uninstall_env())
+    refusal(uninstall, sandbox.uninstall_env())
 
-    assert report.exit_code == 2
     assert sandbox.state.exists()
     assert (sandbox.themes / "claude-warm.json").exists()
     assert sandbox.runner.calls == []
@@ -607,3 +651,178 @@ def test_uninstall_skips_the_marketplace_when_it_was_never_added(sandbox: Sandbo
     assert claude_calls == [
         "claude plugin uninstall terminal-maths@claude-terminal-revamp --scope user"
     ]
+
+
+# Damaged profile markers
+
+DAMAGED_PROFILES = [
+    f"{START_MARKER}\r\nmy-alias-1\r\nmy-alias-2\r\n",
+    f"my-alias\r\n{END_MARKER}\r\n",
+    f"{END_MARKER}\r\nmy-alias\r\n{START_MARKER}\r\n",
+]
+
+
+@pytest.mark.parametrize("damaged", DAMAGED_PROFILES)
+def test_install_refuses_a_profile_with_damaged_markers_and_writes_nothing(
+    sandbox: Sandbox, damaged: str
+) -> None:
+    sandbox.profile.parent.mkdir(parents=True)
+    sandbox.profile.write_bytes(damaged.encode())
+
+    message = refusal(install, sandbox.env())
+
+    assert str(sandbox.profile) in message
+    assert "by hand" in message
+    assert sandbox.profile.read_bytes() == damaged.encode()
+    assert not sandbox.state.exists()
+    assert not sandbox.vscode.exists()
+    assert not sandbox.claude.exists()
+    assert not sandbox.themes.exists()
+    assert not any(SET_POLICY in c or c.startswith("claude") for c in sandbox.runner.commands())
+
+
+def test_uninstall_refuses_a_profile_whose_markers_were_damaged_and_changes_nothing(
+    sandbox: Sandbox,
+) -> None:
+    install(sandbox.env())
+    damaged = f"{START_MARKER}\r\nmy-alias-1\r\nmy-alias-2\r\n".encode()
+    sandbox.profile.write_bytes(damaged)
+    sandbox.runner.calls.clear()
+
+    message = refusal(uninstall, sandbox.uninstall_env())
+
+    assert str(sandbox.profile) in message
+    assert sandbox.profile.read_bytes() == damaged
+    assert sandbox.state.exists()
+    assert sandbox.vscode.exists()
+    assert (sandbox.themes / "claude-warm.json").exists()
+    assert sandbox.runner.calls == []
+
+
+# Plugin and marketplace that were there before
+
+
+MARKETPLACE_LISTING = (
+    "Configured marketplaces:\n\n  \u276f claude-terminal-revamp\n    Source: Folder (C:\\kit)\n"
+)
+PLUGIN_LISTING = "Installed plugins:\n\n  \u276f terminal-maths@claude-terminal-revamp\n"
+
+
+def test_a_marketplace_that_was_already_present_is_skipped_and_left_on_uninstall(
+    sandbox: Sandbox,
+) -> None:
+    sandbox.runner.respond("marketplace list", stdout=MARKETPLACE_LISTING)
+
+    report = install(sandbox.env())
+
+    assert report.exit_code == 0
+    assert "already present" in text_of(report)
+    assert not any("marketplace add" in c for c in sandbox.runner.commands())
+    plugin = sandbox.read_json(sandbox.state)["plugin"]
+    assert plugin == {"marketplace_added": False, "installed": True}
+    uninstall(sandbox.uninstall_env())
+    assert not any("marketplace remove" in c for c in sandbox.runner.commands())
+
+
+def test_a_plugin_that_was_already_present_is_skipped_and_left_on_uninstall(
+    sandbox: Sandbox,
+) -> None:
+    sandbox.runner.respond("plugin list", stdout=PLUGIN_LISTING)
+
+    report = install(sandbox.env())
+
+    assert report.exit_code == 0
+    assert "already present" in text_of(report)
+    assert not any("plugin install" in c for c in sandbox.runner.commands())
+    plugin = sandbox.read_json(sandbox.state)["plugin"]
+    assert plugin == {"marketplace_added": True, "installed": False}
+    uninstall(sandbox.uninstall_env())
+    commands = sandbox.runner.commands()
+    assert not any("plugin uninstall" in c for c in commands)
+    assert any("marketplace remove" in c for c in commands)
+
+
+def test_a_second_install_still_treats_what_the_first_added_as_ours(sandbox: Sandbox) -> None:
+    install(sandbox.env())
+    sandbox.runner.respond("marketplace list", stdout=MARKETPLACE_LISTING)
+    sandbox.runner.respond("plugin list", stdout=PLUGIN_LISTING)
+
+    report = install(sandbox.env())
+
+    assert report.exit_code == 0
+    assert "earlier install" in text_of(report)
+    plugin = sandbox.read_json(sandbox.state)["plugin"]
+    assert plugin == {"marketplace_added": True, "installed": True}
+
+
+def test_a_marketplace_with_a_longer_name_is_not_ours_to_skip(sandbox: Sandbox) -> None:
+    listing = MARKETPLACE_LISTING.replace("claude-terminal-revamp", "claude-terminal-revamp-fork")
+    sandbox.runner.respond("marketplace list", stdout=listing)
+    install(sandbox.env())
+    assert any("marketplace add" in c for c in sandbox.runner.commands())
+
+
+def test_a_failed_marketplace_listing_skips_the_add_and_exits_one(sandbox: Sandbox) -> None:
+    sandbox.runner.respond("marketplace list", returncode=1, stderr="no listing")
+
+    report = install(sandbox.env())
+
+    assert report.exit_code == 1
+    assert "no listing" in text_of(report)
+    assert not any("marketplace add" in c for c in sandbox.runner.commands())
+    assert any("plugin install" in c for c in sandbox.runner.commands())
+    plugin = sandbox.read_json(sandbox.state)["plugin"]
+    assert plugin == {"marketplace_added": False, "installed": True}
+
+
+def test_a_failed_plugin_listing_skips_the_install_and_exits_one(sandbox: Sandbox) -> None:
+    sandbox.runner.respond("plugin list", returncode=1, stderr="no plugins")
+
+    report = install(sandbox.env())
+
+    assert report.exit_code == 1
+    assert "no plugins" in text_of(report)
+    assert not any("plugin install" in c for c in sandbox.runner.commands())
+    plugin = sandbox.read_json(sandbox.state)["plugin"]
+    assert plugin == {"marketplace_added": True, "installed": False}
+
+
+# VS Code indentation
+
+
+@pytest.mark.parametrize(("indent", "prefix"), [(4, "    "), ("\t", "\t")])
+def test_vscode_settings_keep_their_own_indentation(
+    sandbox: Sandbox, indent: int | str, prefix: str
+) -> None:
+    sandbox.vscode.parent.mkdir(parents=True)
+    original = json.dumps({"editor.fontSize": 12}, indent=indent) + "\n"
+    sandbox.vscode.write_text(original, encoding="utf-8", newline="\n")
+
+    install(sandbox.env())
+    assert f'\n{prefix}"editor.fontSize"' in sandbox.vscode.read_text(encoding="utf-8")
+
+    uninstall(sandbox.uninstall_env())
+    assert sandbox.vscode.read_text(encoding="utf-8") == original
+
+
+# Theme files written before an error
+
+
+def test_themes_written_before_an_error_are_removed_by_uninstall(
+    sandbox: Sandbox, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sandbox.write_json(sandbox.repository / "config" / "themes" / "second.json", {"name": "Two"})
+
+    def fail_after_the_first(writes: list[ThemeWrite]) -> list[str]:
+        write_themes(writes[:1])
+        raise OSError("disk full")
+
+    monkeypatch.setattr("installer.installing.write_themes", fail_after_the_first)
+    with pytest.raises(OSError, match="disk full"):
+        install(sandbox.env())
+    assert (sandbox.themes / "claude-warm.json").exists()
+
+    uninstall(sandbox.uninstall_env())
+
+    assert not (sandbox.themes / "claude-warm.json").exists()
+    assert not (sandbox.themes / "second.json").exists()

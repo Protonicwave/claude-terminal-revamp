@@ -70,6 +70,30 @@ def break_themes(raw: dict) -> None:
     raw["themes"] = {"a": 1}
 
 
+def break_profile_created(raw: dict) -> None:
+    raw["profile"]["created"] = "no"
+
+
+def break_profile_break(raw: dict) -> None:
+    raw["profile"]["leading_break_added"] = 1
+
+
+def break_profile_path(raw: dict) -> None:
+    raw["profile"]["path"] = 5
+
+
+def break_profile_shape(raw: dict) -> None:
+    raw["profile"] = "x"
+
+
+def break_plugin_flag(raw: dict) -> None:
+    raw["plugin"]["installed"] = "yes"
+
+
+def break_plugin_shape(raw: dict) -> None:
+    raw["plugin"] = []
+
+
 def break_missing_key(raw: dict) -> None:
     del raw["plugin"]
 
@@ -84,6 +108,12 @@ def break_missing_key(raw: dict) -> None:
         break_absent_flag,
         break_themes,
         break_missing_key,
+        break_profile_created,
+        break_profile_break,
+        break_profile_path,
+        break_profile_shape,
+        break_plugin_flag,
+        break_plugin_shape,
     ],
 )
 def test_parse_state_rejects_damaged_files(damage) -> None:

@@ -72,12 +72,27 @@ def _profile_to_json(profile: ProfileRecord | None) -> JsonObject | None:
     }
 
 
-def _profile_from_json(item: JsonObject | None) -> ProfileRecord | None:
-    if item is None:
+def _object(value: object, name: str) -> JsonObject:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object, got {value!r}")
+    return value
+
+
+def _flag(item: JsonObject, key: str) -> bool:
+    value = item[key]
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be true or false, got {value!r}")
+    return value
+
+
+def _profile_from_json(raw: object) -> ProfileRecord | None:
+    if raw is None:
         return None
-    return ProfileRecord(
-        str(item["path"]), bool(item["created"]), bool(item["leading_break_added"])
-    )
+    item = _object(raw, "profile")
+    path = item["path"]
+    if not isinstance(path, str):
+        raise ValueError(f"profile path {path!r} must be a string")
+    return ProfileRecord(path, _flag(item, "created"), _flag(item, "leading_break_added"))
 
 
 def _to_json(state: State) -> JsonObject:
@@ -110,14 +125,14 @@ def _from_json(raw: JsonObject) -> State:
         ),
         "themes must map file names to digests",
     )
-    plugin = raw["plugin"]
+    plugin = _object(raw["plugin"], "plugin")
     return State(
         vscode=tuple(_change_from_json(item) for item in raw["vscode"]),
         claude=tuple(_change_from_json(item) for item in raw["claude"]),
         themes=themes,
         previous_execution_policy=policy,
         profile=_profile_from_json(raw["profile"]),
-        plugin=PluginRecord(bool(plugin["marketplace_added"]), bool(plugin["installed"])),
+        plugin=PluginRecord(_flag(plugin, "marketplace_added"), _flag(plugin, "installed")),
     )
 
 
@@ -129,7 +144,7 @@ def parse_state(text: str, label: str) -> State:
     raw = parse_object(text, label)
     try:
         return _from_json(raw)
-    except (KeyError, TypeError, ValueError, AttributeError) as err:
+    except (KeyError, TypeError, ValueError) as err:
         raise InstallerError(f"{label} is not a state file this installer wrote: {err!r}") from err
 
 

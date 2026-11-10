@@ -1,6 +1,7 @@
 """Effects: files and commands. Decisions live in the pure modules."""
 
 import hashlib
+import re
 import shutil
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -8,7 +9,7 @@ from pathlib import Path
 
 from installer.jsonio import dumps, parse_object
 from installer.model import InstallerError, JsonObject, Runner
-from installer.state import POLICY_NAME
+from installer.state import POLICY_NAME, State, dump_state
 
 POWERSHELL = "powershell"
 CLAUDE = "claude"
@@ -16,7 +17,6 @@ MARKETPLACE_NAME = "claude-terminal-revamp"
 PLUGIN_SPEC = "terminal-maths@claude-terminal-revamp"
 PERMISSIVE_POLICIES = frozenset({"remotesigned", "unrestricted", "bypass"})
 TARGET_POLICY = "RemoteSigned"
-VSCODE_INDENT = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +54,16 @@ def query_profile_path(run: Runner) -> Outcome:
     if outcome.ok and not outcome.output:
         return Outcome(False, "", "The PowerShell profile path query returned nothing")
     return outcome
+
+
+def lists_name(output: str, name: str) -> bool:
+    """Whether a `claude plugin ... list` output names exactly this marketplace or plugin."""
+    return re.search(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])", output) is not None
+
+
+def record_state(path: Path, state: State) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(dump_state(state), encoding="utf-8", newline="\n")
 
 
 def sha256_hex(data: bytes) -> str:
@@ -94,23 +104,23 @@ def write_settings(
 @dataclass(frozen=True, slots=True)
 class ThemeWrite:
     destination: Path
-    data: bytes
+    content: bytes
 
 
 def plan_themes(source_dir: Path, themes_dir: Path, recorded: Collection[str]) -> list[ThemeWrite]:
     """Choose the theme files to write, refusing to overwrite a file that is not ours."""
     writes: list[ThemeWrite] = []
     for source in sorted(source_dir.glob("*.json")):
-        data = source.read_bytes()
+        content = source.read_bytes()
         destination = themes_dir / source.name
         if destination.exists() and source.name not in recorded:
-            if destination.read_bytes() != data:
+            if destination.read_bytes() != content:
                 raise InstallerError(
                     f"{destination} exists with different content and was not installed by "
                     "this kit; move it aside and run again"
                 )
             continue
-        writes.append(ThemeWrite(destination, data))
+        writes.append(ThemeWrite(destination, content))
     return writes
 
 
@@ -118,6 +128,6 @@ def write_themes(writes: list[ThemeWrite]) -> list[str]:
     lines: list[str] = []
     for write in writes:
         write.destination.parent.mkdir(parents=True, exist_ok=True)
-        write.destination.write_bytes(write.data)
+        write.destination.write_bytes(write.content)
         lines.append(f"Installed theme {write.destination.name}")
     return lines
