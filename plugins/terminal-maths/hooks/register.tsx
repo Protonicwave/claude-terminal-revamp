@@ -48,22 +48,22 @@ export const register: Register = on => {
   })
 
   // An open preview reloads the file when it changes on disk, so writing
-  // every main reply keeps the preview current without /typeset.
+  // every main reply keeps the preview current without /typeset. With no
+  // home folder there is nowhere to write; /typeset says so when it runs.
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined || e.answer === '') return next(e)
     await update($, lastAnswer, () => e.answer)
-    const result = await next(e)
     const location = await typesetLocation($)
-    if (location === undefined) return result
+    if (location === undefined) return next(e)
     try {
       await $.fs.write(location.path, e.answer)
     } catch (error: unknown) {
-      // A failed write must not fail the turn: /typeset writes the file again
-      // when it runs. Each toast replaces this plugin's last, so a failure
-      // that repeats every turn does not pile up.
+      // Uncaught, the failure would reach only the debug log and the preview
+      // would go stale unseen. Each toast replaces this plugin's last, so a
+      // failure that repeats every turn does not pile up.
       $.ui.toast(`Could not update the typeset preview: ${describeError(error)}`)
     }
-    return result
+    return next(e)
   })
 
   // The VS Code panel and the desktop app typeset LaTeX themselves, so only
