@@ -1,0 +1,26 @@
+{
+  "theme": "custom:claude-warm",
+  "tui": "fullscreen",
+  "maxProseWidth": 100,
+  "statusLine": {
+    "type": "command",
+    "command": "\"{python}\" \"{repository}/statusline/statusline.py\"",
+    "padding": 1,
+    "refreshInterval": 10
+  },
+  "spinnerVerbs": {
+    "mode": "append",
+    "verbs": [
+      "Renormalising",
+      "Collapsing the wavefunction",
+      "Integrating by parts",
+      "Diagonalising",
+      "Fourier transforming",
+      "Minimising the action",
+      "Tunnelling",
+      "Taylor expanding",
+      "Thermalising",
+      "Summing the series"
+    ]
+  }
+}

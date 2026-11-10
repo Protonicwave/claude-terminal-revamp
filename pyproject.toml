@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
-testpaths = ["statusline"]
+testpaths = ["statusline", "installer"]
 # The timing budget is machine-dependent, so it runs only when asked: pytest -m timing
 addopts = "-m 'not timing'"
 markers = ["timing: measures the status line against its 150 ms budget"]
