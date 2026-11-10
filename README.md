@@ -3,7 +3,7 @@
 Makes Claude Code in the VS Code integrated terminal read more like the Claude app. It changes four things:
 
 - **Maths renders in the terminal.** The `terminal-maths` mod asks Claude to write maths as LaTeX and draws it as Unicode on screen. Inline maths becomes one line (`E = mc²`, `∑ᵢ₌₁ⁿ xᵢ`). Display maths becomes a two-dimensional block with stacked fractions, limits, tall brackets, matrices, cases and aligned rows. The VS Code chat panel and the desktop app typeset LaTeX themselves, so the mod leaves those alone.
-- **`/typeset`** opens the last reply in VS Code's Markdown preview, which typesets the maths with KaTeX. The preview then follows the conversation: every finished reply is written to `~/.claude/typeset/latest.md`, and VS Code reloads the open preview when that file changes.
+- **`/typeset`** opens the last reply in VS Code's Markdown preview, which typesets the maths with KaTeX. The preview then follows the conversation: as each main reply ends, interrupted ones included, its text is written to `~/.claude/typeset/latest.md`, and VS Code reloads the open preview when that file changes. The file is written whether or not `/typeset` has run. Subagent replies are not written.
 - **A two-line status line** shows the model, effort, folder, git branch and output style, then a context bar, cost, lines changed and the five-hour limit.
 - **One palette everywhere ("Claude Warm").** It covers the VS Code terminal colours, font and cursor, a custom Claude Code theme, physics spinner verbs, a 100-column reading width, fullscreen mode, and a matching PowerShell prompt with PSReadLine colours.
 
