@@ -16,7 +16,7 @@ Makes Claude Code in the VS Code integrated terminal read more like the Claude a
 ## Requirements
 
 - Claude Code 2.1.322 or later, Python 3.12 or later, git, VS Code with the `code` command on `PATH`.
-- The PowerShell prompt is for Windows PowerShell 5.1 or PowerShell 7. Elsewhere the installer skips it.
+- The PowerShell prompt is installed into the Windows PowerShell 5.1 profile. PowerShell 7 keeps a separate profile, which the installer leaves alone; dot-source `config/prompt.ps1` from it by hand if you use `pwsh`. On other systems the installer skips the prompt.
 - The font stack expects Cascadia Code and falls back to Cambria Math for maths glyphs. Both ship with Windows 11.
 
 ## Install
