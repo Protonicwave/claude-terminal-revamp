@@ -6,9 +6,11 @@ import { renderMathsInMarkdown } from './markdown-maths'
 const PLUGIN = 'terminal-maths'
 const DEFAULT_COLUMNS = 80
 const EDITOR_TIMEOUT_MS = 15_000
+const TYPESET_FILE = '.claude/typeset/latest.md'
 
 // Change the shape tag if the stored value's type changes: it declines what
-// an earlier version stored, which outlives a reload.
+// an earlier version stored, which outlives a reload. The plugin name is
+// spelled out because the engine reads state references as literals.
 const lastAnswer = atom({ plugin: 'terminal-maths', key: 'lastAnswer' } as const, '', { shape: 'answer-1' })
 
 const MATHS_GUIDANCE = [
@@ -51,13 +53,15 @@ export const register: Register = on => {
     if (answer === '') return { text: 'There is no reply to typeset yet.' }
     const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
     if (home === undefined) return { text: 'Cannot typeset: neither USERPROFILE nor HOME is set.' }
-    const path = `${home.replaceAll('\\', '/')}/.claude/typeset/latest.md`
+    const path = `${home.replaceAll('\\', '/')}/${TYPESET_FILE}`
     await $.fs.write(path, answer)
     const isWindows = (await $.env.get('OS')) === 'Windows_NT'
-    // `code` is a batch file on Windows, which only cmd.exe can start.
-    const argv = isWindows ? ['cmd.exe', '/d', '/c', 'code', '-r', path] : ['code', '-r', path]
+    // `code` is a batch file on Windows, which only cmd.exe can start. The
+    // path goes relative to the home folder, so no character of the home
+    // path (an `&` or a `%`) ever reaches cmd.exe's parser.
+    const argv = isWindows ? ['cmd.exe', '/d', '/c', 'code', '-r', TYPESET_FILE] : ['code', '-r', TYPESET_FILE]
     try {
-      const { exitCode } = await $.process.run(argv, { timeoutMs: EDITOR_TIMEOUT_MS })
+      const { exitCode } = await $.process.run(argv, { cwd: home, timeoutMs: EDITOR_TIMEOUT_MS })
       if (exitCode === 0) return { text: `Opened the typeset reply in VS Code (${path}).` }
       return { text: `Saved ${path}, but \`code\` exited with ${exitCode}. Open the file in VS Code to see it typeset.` }
     } catch (error: unknown) {

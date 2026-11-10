@@ -64,7 +64,7 @@ test('the system prompt gains the maths section last', async ($, on) => {
 
 test('/typeset writes the last main reply and opens it in VS Code', async ($, on) => {
   const written: Array<{ path: string; text: string }> = []
-  const started: string[][] = []
+  const started: Array<{ argv: string[]; cwd: string | undefined }> = []
   on('turn.complete', () => ({ text: '' }))
   on('env.get', (_, e) => ({ value: e.name === 'USERPROFILE' ? 'C:\\Users\\someone' : e.name === 'OS' ? 'Windows_NT' : undefined }))
   on('fs.write', (_, e) => {
@@ -72,7 +72,7 @@ test('/typeset writes the last main reply and opens it in VS Code', async ($, on
     return { value: undefined }
   })
   on('process.run', (_, e) => {
-    started.push([...e.argv])
+    started.push({ argv: [...e.argv], cwd: e.init?.cwd })
     return { value: RAN }
   })
 
@@ -83,7 +83,10 @@ test('/typeset writes the last main reply and opens it in VS Code', async ($, on
   // The engine hands the hook the path in the platform's own form.
   expect(written.map(file => file.path.replaceAll('\\', '/'))).toEqual(['C:/Users/someone/.claude/typeset/latest.md'])
   expect(written.map(file => file.text)).toEqual(['Main $x^2$.'])
-  expect(started).toEqual([['cmd.exe', '/d', '/c', 'code', '-r', 'C:/Users/someone/.claude/typeset/latest.md']])
+  // The path is relative to the home folder, so nothing from it reaches cmd.exe's parser.
+  expect(started).toEqual([
+    { argv: ['cmd.exe', '/d', '/c', 'code', '-r', '.claude/typeset/latest.md'], cwd: 'C:\\Users\\someone' },
+  ])
   expect(result.text).toMatch(/^Opened the typeset reply/)
 })
 
