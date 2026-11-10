@@ -27,13 +27,13 @@ const RAN = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isS
 const HOME = 'C:\\Users\\someone'
 const LATEST = 'C:/Users/someone/.claude/typeset/latest.md'
 
-// These hooks stand for the engine: a Windows home folder (or none), a file
+// These hooks stand for the engine: the environment variables given, a file
 // system held in memory and the toast stack.
-function stubEngine(on: On, home: string | undefined) {
+function stubEngine(on: On, env: Readonly<Record<string, string>>) {
   const files = new Map<string, string>()
   const toasts: string[] = []
   on('turn.complete', () => ({ text: '' }))
-  on('env.get', (_, e) => ({ value: e.name === 'USERPROFILE' ? home : e.name === 'OS' ? 'Windows_NT' : undefined }))
+  on('env.get', (_, e) => ({ value: env[e.name] }))
   on('fs.write', (_, e) => {
     // The engine hands the hook the path in the platform's own form.
     files.set(e.path.replaceAll('\\', '/'), e.text)
@@ -88,7 +88,7 @@ test('/typeset writes the last main reply and opens it in VS Code', async ($, on
   const written: Array<{ path: string; text: string }> = []
   const started: Array<{ argv: string[]; cwd: string | undefined }> = []
   on('turn.complete', () => ({ text: '' }))
-  on('env.get', (_, e) => ({ value: e.name === 'USERPROFILE' ? 'C:\\Users\\someone' : e.name === 'OS' ? 'Windows_NT' : undefined }))
+  on('env.get', (_, e) => ({ value: e.name === 'USERPROFILE' ? HOME : e.name === 'OS' ? 'Windows_NT' : undefined }))
   on('fs.write', (_, e) => {
     written.push({ path: e.path, text: e.text })
     return { value: undefined }
@@ -107,30 +107,37 @@ test('/typeset writes the last main reply and opens it in VS Code', async ($, on
   expect(written.map(file => file.text)).toEqual(['Main $x^2$.', 'Main $x^2$.'])
   // The path is relative to the home folder, so nothing from it reaches cmd.exe's parser.
   expect(started).toEqual([
-    { argv: ['cmd.exe', '/d', '/c', 'code', '-r', '.claude/typeset/latest.md'], cwd: 'C:\\Users\\someone' },
+    { argv: ['cmd.exe', '/d', '/c', 'code', '-r', '.claude/typeset/latest.md'], cwd: HOME },
   ])
   expect(result.text).toMatch(/^Opened the typeset reply/)
 })
 
 test('a main reply updates the typeset file without /typeset', async ($, on) => {
-  const { files } = stubEngine(on, HOME)
+  const { files } = stubEngine(on, { USERPROFILE: HOME })
 
   await $.turn.complete({ ...TURN, answer: 'Main $x^2$.' })
 
   expect([...files]).toEqual([[LATEST, 'Main $x^2$.']])
 })
 
-test('a subagent reply and an empty answer leave the typeset file alone', async ($, on) => {
-  const { files } = stubEngine(on, HOME)
+test('a subagent reply leaves the typeset file alone', async ($, on) => {
+  const { files } = stubEngine(on, { USERPROFILE: HOME })
 
   await $.turn.complete({ ...TURN, agentId: 'agent-1', answer: 'Subagent report.' })
-  await $.turn.complete({ ...TURN, turnId: 'turn-2', answer: '' })
+
+  expect(files.size).toBe(0)
+})
+
+test('an empty answer leaves the typeset file alone', async ($, on) => {
+  const { files } = stubEngine(on, { USERPROFILE: HOME })
+
+  await $.turn.complete({ ...TURN, answer: '' })
 
   expect(files.size).toBe(0)
 })
 
 test('each main reply replaces the one before in the typeset file', async ($, on) => {
-  const { files } = stubEngine(on, HOME)
+  const { files } = stubEngine(on, { USERPROFILE: HOME })
 
   await $.turn.complete({ ...TURN, answer: 'First.' })
   await $.turn.complete({ ...TURN, turnId: 'turn-2', answer: 'Second.' })
@@ -142,9 +149,7 @@ test('a failed write of the typeset file raises a toast and the turn still compl
   const toasts: string[] = []
   on('turn.complete', () => ({ text: 'Turn done.' }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/someone' : undefined }))
-  on('fs.write', () => {
-    return { deny: 'EACCES: permission denied' }
-  })
+  on('fs.write', () => ({ deny: 'EACCES: permission denied' }))
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
     return { value: undefined }
@@ -158,7 +163,7 @@ test('a failed write of the typeset file raises a toast and the turn still compl
 })
 
 test('without a home folder a reply writes nothing and raises no toast', async ($, on) => {
-  const { files, toasts } = stubEngine(on, undefined)
+  const { files, toasts } = stubEngine(on, {})
 
   await $.turn.complete({ ...TURN, answer: 'Reply.' })
 
