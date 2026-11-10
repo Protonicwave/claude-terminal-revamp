@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import { renderMathsInMarkdown } from './markdown-maths'
 
@@ -20,6 +20,23 @@ const MATHS_GUIDANCE = [
   'Write a literal dollar sign as \\$ in any reply that also contains maths.',
 ].join(' ')
 
+// A drive letter or a slash first, so an empty or relative value cannot put
+// the file at the drive root or inside the project.
+const ABSOLUTE_PATH = /^(?:[A-Za-z]:)?[\\/]/
+
+type TypesetLocation = { readonly home: string; readonly path: string }
+
+async function typesetLocation($: EngineInterface): Promise<TypesetLocation | undefined> {
+  const candidates = [await $.env.get('USERPROFILE'), await $.env.get('HOME')]
+  const home = candidates.find(value => value !== undefined && ABSOLUTE_PATH.test(value))
+  if (home === undefined) return undefined
+  return { home, path: `${home.replaceAll('\\', '/')}/${TYPESET_FILE}` }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -35,8 +52,22 @@ export const register: Register = on => {
     return { ...composed, sections: [...composed.sections, section] }
   })
 
+  // An open preview reloads the file when it changes on disk, so writing
+  // every main reply keeps the preview current without /typeset. With no
+  // home folder there is nowhere to write; /typeset says so when it runs.
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined && e.answer !== '') await update($, lastAnswer, () => e.answer)
+    if (e.agentId !== undefined || e.answer === '') return next(e)
+    await update($, lastAnswer, () => e.answer)
+    const location = await typesetLocation($)
+    if (location === undefined) return next(e)
+    try {
+      await $.fs.write(location.path, e.answer)
+    } catch (error: unknown) {
+      // Uncaught, the failure would reach only the debug log and the preview
+      // would go stale unseen. Each toast replaces this plugin's last, so a
+      // failure that repeats every turn does not pile up.
+      $.ui.toast(`Could not update the typeset preview: ${describeError(error)}`)
+    }
     return next(e)
   })
 
@@ -51,9 +82,9 @@ export const register: Register = on => {
   on('command.run', { command: 'typeset' }, async $ => {
     const answer = await read($, lastAnswer)
     if (answer === '') return { text: 'There is no reply to typeset yet.' }
-    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
-    if (home === undefined) return { text: 'Cannot typeset: neither USERPROFILE nor HOME is set.' }
-    const path = `${home.replaceAll('\\', '/')}/${TYPESET_FILE}`
+    const location = await typesetLocation($)
+    if (location === undefined) return { text: 'Cannot typeset: neither USERPROFILE nor HOME holds an absolute path.' }
+    const { home, path } = location
     await $.fs.write(path, answer)
     const isWindows = (await $.env.get('OS')) === 'Windows_NT'
     // `code` is a batch file on Windows, which only cmd.exe can start. The
@@ -65,8 +96,9 @@ export const register: Register = on => {
       if (exitCode === 0) return { text: `Opened the typeset reply in VS Code (${path}).` }
       return { text: `Saved ${path}, but \`code\` exited with ${exitCode}. Open the file in VS Code to see it typeset.` }
     } catch (error: unknown) {
-      const reason = error instanceof Error ? error.message : String(error)
-      return { text: `Saved ${path}, but could not start VS Code (${reason}). Open the file there to see it typeset.` }
+      return {
+        text: `Saved ${path}, but could not start VS Code (${describeError(error)}). Open the file there to see it typeset.`,
+      }
     }
   })
 }

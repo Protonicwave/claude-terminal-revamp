@@ -3,7 +3,7 @@
 Makes Claude Code in the VS Code integrated terminal read more like the Claude app. It changes four things:
 
 - **Maths renders in the terminal.** The `terminal-maths` mod asks Claude to write maths as LaTeX and draws it as Unicode on screen. Inline maths becomes one line (`E = mc²`, `∑ᵢ₌₁ⁿ xᵢ`). Display maths becomes a two-dimensional block with stacked fractions, limits, tall brackets, matrices, cases and aligned rows. The VS Code chat panel and the desktop app typeset LaTeX themselves, so the mod leaves those alone.
-- **`/typeset`** writes the last reply to `~/.claude/typeset/latest.md` and opens it in VS Code's Markdown preview, which typesets the maths with KaTeX.
+- **`/typeset`** opens the last reply in VS Code's Markdown preview, which typesets the maths with KaTeX. The preview then follows the conversation: as each main reply ends, interrupted ones included, its text is written to `~/.claude/typeset/latest.md`, and VS Code reloads the open preview when that file changes. The file is written whether or not `/typeset` has run. Subagent replies are not written.
 - **A two-line status line** shows the model, effort, folder, git branch and output style, then a context bar, cost, lines changed and the five-hour limit.
 - **One palette everywhere ("Claude Warm").** It covers the VS Code terminal colours, font and cursor, a custom Claude Code theme, physics spinner verbs, a 100-column reading width, fullscreen mode, and a matching PowerShell prompt with PSReadLine colours.
 
@@ -65,5 +65,6 @@ claude plugin validate plugins/terminal-maths
 ## Limits
 
 - The VS Code terminal cannot show inline images, so typeset equations live in `/typeset`, not in the chat.
+- Every session writes the same `latest.md`, so with two sessions open the preview shows whichever reply finished last.
 - Display maths wider than the terminal falls back to the one-line form. Superscripts and subscripts without a Unicode form fall back to `^(…)` and `_(…)`.
 - Maths glyph widths depend on the fallback font. Cambria Math is not monospaced, so some symbols can sit slightly off the grid.
