@@ -136,6 +136,14 @@ test('an empty answer leaves the typeset file alone', async ($, on) => {
   expect(files.size).toBe(0)
 })
 
+test('an interrupted reply updates the typeset file with the text the terminal shows', async ($, on) => {
+  const { files } = stubEngine(on, { USERPROFILE: HOME })
+
+  await $.turn.complete({ ...TURN, isAborted: true, reason: 'aborted', answer: 'Partial' })
+
+  expect([...files]).toEqual([[LATEST, 'Partial']])
+})
+
 test('each main reply replaces the one before in the typeset file', async ($, on) => {
   const { files } = stubEngine(on, { USERPROFILE: HOME })
 
