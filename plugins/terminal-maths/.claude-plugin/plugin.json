@@ -1,0 +1,10 @@
+{
+  "name": "terminal-maths",
+  "version": "0.1.0",
+  "description": "Draws LaTeX in replies as Unicode maths in the terminal, and /typeset opens the last reply typeset in VS Code",
+  "author": {
+    "name": "Protonicwave"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

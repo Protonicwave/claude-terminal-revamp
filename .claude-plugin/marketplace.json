@@ -1,0 +1,5 @@
+{
+  "name": "claude-terminal-revamp",
+  "owner": { "name": "Protonicwave" },
+  "plugins": [{ "name": "terminal-maths", "source": "./plugins/terminal-maths" }]
+}
