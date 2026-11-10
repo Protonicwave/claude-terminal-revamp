@@ -282,3 +282,46 @@ describe('symbol tables', () => {
     for (const table of [SUPERSCRIPTS, SUBSCRIPTS]) expect([...table.values()].includes('')).toBe(false)
   })
 })
+
+describe('review findings', () => {
+  test('escaped brackets in prose stay as written', () => {
+    for (const source of [String.raw`Index with a\[0\] here.`, String.raw`\[1\] Smith, 2020.`]) {
+      expect(render(source)).toBe(source)
+    }
+  })
+
+  test('a fence line with an info string does not close the fence', () => {
+    const source = ['```', '```js', '$y^2$', '```', '$z^2$'].join('\n')
+    expect(render(source)).toBe(['```', '```js', '$y^2$', '```', 'z²'].join('\n'))
+  })
+
+  test('only a fence at least as long as the opening closes it', () => {
+    const source = ['````', '```', '$y^2$', '`````', '$z^2$'].join('\n')
+    expect(render(source)).toBe(['````', '```', '$y^2$', '`````', 'z²'].join('\n'))
+  })
+
+  test('many unclosed openers render in linear time', () => {
+    // 160,000 characters: the quadratic search this guards against took 130 ms here.
+    const reply = String.raw`\[ x `.repeat(32000)
+    const started = performance.now()
+    expect(render(reply)).toBe(reply)
+    expect(performance.now() - started).toBeLessThan(50)
+  })
+
+  test('an alphabet style reaches a scripted letter', () => {
+    expect(render(String.raw`$\mathbf{v_1}$`)).toBe('𝐯₁')
+  })
+
+  test('an alphabet style reaches into groups but leaves fractions as written', () => {
+    expect(render(String.raw`$\mathbf{{a}\frac{b}{c}}$`)).toBe('𝐚b/c')
+  })
+
+  test('gather rows are centred', () => {
+    expect(render(String.raw`$$\begin{gather} a \\ bbbbbb \end{gather}$$`)).toBe(block('    a', '  bbbbbb'))
+  })
+
+  test('wide characters count two columns when fitting display maths', () => {
+    const source = String.raw`$$\text{日本} = \frac{a}{b}$$`
+    expect(renderMathsInMarkdown(source, 12)).toBe('日本 = a/b')
+  })
+})

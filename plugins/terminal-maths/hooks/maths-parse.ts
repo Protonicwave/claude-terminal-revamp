@@ -54,7 +54,7 @@ const IGNORED_COMMANDS = new Set([
 ])
 const IGNORED_WITH_ARGUMENT = new Set(['label', 'tag', 'color', 'hspace', 'vspace', 'phantom'])
 const TEXT_COMMANDS = new Set(['text', 'textrm', 'textit', 'textbf', 'textsf', 'texttt', 'mbox', 'textnormal'])
-const UPRIGHT_COMMANDS = new Set(['mathrm', 'mathit', 'mathsf', 'mathtt', 'mathnormal', 'textcolor'])
+const UPRIGHT_COMMANDS = new Set(['mathrm', 'mathit', 'mathsf', 'mathtt', 'mathnormal'])
 const FRACTION_COMMANDS = new Set(['frac', 'dfrac', 'tfrac', 'cfrac'])
 const BINOMIAL_COMMANDS = new Set(['binom', 'dbinom', 'tbinom'])
 const SIZE_COMMANDS = new Set([
@@ -222,7 +222,10 @@ export function parseMaths(source: string): MathsRows {
     }
     if (BINOMIAL_COMMANDS.has(name)) return { kind: 'binom', top: readArgument(depth), bottom: readArgument(depth) }
     if (TEXT_COMMANDS.has(name)) return { kind: 'text', text: plainText(readRawGroup()) }
-    if (name === 'textcolor') readRawGroup()
+    if (name === 'textcolor') {
+      readRawGroup()
+      return { kind: 'group', body: readArgument(depth) }
+    }
     if (UPRIGHT_COMMANDS.has(name)) return { kind: 'group', body: readArgument(depth) }
     if (name === 'operatorname') {
       const hasLimits = peek() === '*'
@@ -338,10 +341,22 @@ function dropTrailingEmptyRow(rows: MathsList[][]): MathsRows {
   return rows.length > 1 && isEmpty ? rows.slice(0, -1) : rows
 }
 
+// Recursion is bounded by the parser's nesting limit, which built the tree.
 function restyle(list: MathsList, letters: ReadonlyMap<string, string>): MathsList {
-  return list.map(node =>
-    node.kind === 'atom' && node.cls === 'ord' ? { ...node, text: letters.get(node.text) ?? node.text } : node,
-  )
+  return list.map(node => restyleNode(node, letters))
+}
+
+function restyleNode(node: MathsNode, letters: ReadonlyMap<string, string>): MathsNode {
+  switch (node.kind) {
+    case 'atom':
+      return node.cls === 'ord' ? { ...node, text: letters.get(node.text) ?? node.text } : node
+    case 'group':
+      return { ...node, body: restyle(node.body, letters) }
+    case 'scripts':
+      return { ...node, base: restyleNode(node.base, letters) }
+    default:
+      return node
+  }
 }
 
 function negate(node: MathsNode | null): MathsNode {

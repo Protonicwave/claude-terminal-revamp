@@ -126,14 +126,23 @@ function bracket(text: string): string {
   return isAtomic(text) ? text : `(${text})`
 }
 
-/** `text` as Unicode script characters, or null when one has no script form. */
-function toScript(text: string, table: ReadonlyMap<string, string>): string | null {
-  if (table === SUPERSCRIPTS && [...text].every(char => RAISED_MARKS.has(char))) return text
-  return mapAll(text, table)
+/** `text` in Unicode superscript characters, or null when one has none. Marks that already sit high stay as written. */
+function toSuperscript(text: string): string | null {
+  if ([...text].every(char => RAISED_MARKS.has(char))) return text
+  return mapAll(text, SUPERSCRIPTS)
 }
 
-function scriptText(text: string, table: ReadonlyMap<string, string>, marker: string): string {
-  return toScript(text, table) ?? `${marker}${bracket(text)}`
+/** `text` in Unicode subscript characters, or null when one has none. */
+function toSubscript(text: string): string | null {
+  return mapAll(text, SUBSCRIPTS)
+}
+
+function superscriptText(text: string): string {
+  return toSuperscript(text) ?? `^${bracket(text)}`
+}
+
+function subscriptText(text: string): string {
+  return toSubscript(text) ?? `_${bracket(text)}`
 }
 
 function accentText(text: string, accent: keyof typeof COMBINING): string {
@@ -142,8 +151,6 @@ function accentText(text: string, accent: keyof typeof COMBINING): string {
   if (accent === 'bar' || accent === 'underline') return [...text].map(char => `${char}${COMBINING[accent]}`).join('')
   return `${accent}(${text})`
 }
-
-// ---------------------------------------------------------------- inline
 
 /** One line of Unicode for `rows`, with `;` between rows. */
 export function renderInline(rows: MathsRows): string {
@@ -184,14 +191,14 @@ function inlineNode(node: MathsNode, isTight: boolean): string {
 function inlineRoot(index: MathsList | null, body: MathsList): string {
   const degree = index === null ? '' : inlineList(index, true)
   const radicand = bracket(inlineList(body, true))
-  const sign = ROOT_SIGNS.get(degree) ?? `${scriptText(degree, SUPERSCRIPTS, '^')}√`
+  const sign = ROOT_SIGNS.get(degree) ?? `${superscriptText(degree)}√`
   return `${sign}${radicand}`
 }
 
 function inlineScripts(node: Extract<MathsNode, { kind: 'scripts' }>): string {
   const base = inlineNode(node.base, true)
-  const sub = node.sub === null ? '' : scriptText(inlineList(node.sub, true), SUBSCRIPTS, '_')
-  const sup = node.sup === null ? '' : scriptText(inlineList(node.sup, true), SUPERSCRIPTS, '^')
+  const sub = node.sub === null ? '' : subscriptText(inlineList(node.sub, true))
+  const sup = node.sup === null ? '' : superscriptText(inlineList(node.sup, true))
   return `${node.base.kind === 'frac' ? `(${base})` : base}${sub}${sup}`
 }
 
@@ -208,8 +215,6 @@ function inlineGrid(env: string, rows: MathsRows): string {
   return `${open}${open ? ' ' : ''}${body}${close ? ' ' : ''}${close}`
 }
 
-// ---------------------------------------------------------------- display
-
 type Box = { readonly lines: readonly string[]; readonly baseline: number; readonly width: number }
 
 /** Lines of text drawing `rows` in two dimensions, `suffix` on the baseline; trailing spaces removed. */
@@ -221,18 +226,25 @@ export function renderDisplay(rows: MathsRows, suffix: string): string[] {
   return joinBoxes([box, textBox(suffix)]).lines.map(line => line.trimEnd())
 }
 
-function cellWidth(text: string): number {
+// East Asian wide characters take two terminal columns; combining marks take none.
+const WIDE_CHARACTER = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFD}]/u
+
+/** The number of terminal columns `text` occupies. */
+export function displayWidth(text: string): number {
   let width = 0
-  for (const char of text) if (!/\p{M}/u.test(char)) width += 1
+  for (const char of text) {
+    if (/\p{M}/u.test(char)) continue
+    width += WIDE_CHARACTER.test(char) ? 2 : 1
+  }
   return width
 }
 
 function padTo(text: string, width: number): string {
-  return text + ' '.repeat(Math.max(0, width - cellWidth(text)))
+  return text + ' '.repeat(Math.max(0, width - displayWidth(text)))
 }
 
 function textBox(text: string): Box {
-  return { lines: [text], baseline: 0, width: cellWidth(text) }
+  return { lines: [text], baseline: 0, width: displayWidth(text) }
 }
 
 function blank(width: number): string {
@@ -302,8 +314,8 @@ function layoutNode(node: MathsNode, isTight: boolean): Box {
 
 function layoutRoot(index: MathsList | null, body: Box): Box {
   const degree = index === null ? '' : inlineList(index, true)
-  const sign = ROOT_SIGNS.get(degree) ?? `${scriptText(degree, SUPERSCRIPTS, '^')}√`
-  const signWidth = cellWidth(sign)
+  const sign = ROOT_SIGNS.get(degree) ?? `${superscriptText(degree)}√`
+  const signWidth = displayWidth(sign)
   const lines = [
     blank(signWidth) + '─'.repeat(body.width),
     ...body.lines.map((line, row) =>
@@ -316,7 +328,7 @@ function layoutRoot(index: MathsList | null, body: Box): Box {
 
 function layoutAccent(accent: keyof typeof COMBINING, body: MathsList): Box {
   const box = layoutList(body, true)
-  if (box.lines.length === 1 && cellWidth(box.lines[0] ?? '') <= 1) {
+  if (box.lines.length === 1 && displayWidth(box.lines[0] ?? '') <= 1) {
     return textBox(accentText(box.lines[0] ?? '', accent))
   }
   const glyph = ACCENT_ROW_GLYPH[accent]
@@ -333,17 +345,17 @@ function layoutScripts(node: Extract<MathsNode, { kind: 'scripts' }>): Box {
     const parts = [sup, base, sub].filter((part): part is Box => part !== null)
     return stack(parts, (sup?.lines.length ?? 0) + base.baseline)
   }
-  const supText = node.sup === null ? '' : toScript(inlineList(node.sup, true), SUPERSCRIPTS)
-  const subText = node.sub === null ? '' : toScript(inlineList(node.sub, true), SUBSCRIPTS)
-  const hasScriptForms = [sup, sub].every(part => part === null || part.lines.length === 1)
-  if (supText === null || subText === null || !hasScriptForms) return raiseScripts(base, sup, sub)
+  const supText = node.sup === null ? '' : toSuperscript(inlineList(node.sup, true))
+  const subText = node.sub === null ? '' : toSubscript(inlineList(node.sub, true))
+  const areScriptsOneLine = [sup, sub].every(part => part === null || part.lines.length === 1)
+  if (supText === null || subText === null || !areScriptsOneLine) return raiseScripts(base, sup, sub)
   if (base.lines.length === 1) return textBox(inlineScripts(node))
   return besideScripts(base, supText, subText)
 }
 
 /** Unicode scripts written beside a tall base: the superscript at its top, the subscript at its foot. */
 function besideScripts(base: Box, supText: string, subText: string): Box {
-  const width = base.width + Math.max(cellWidth(supText), cellWidth(subText))
+  const width = base.width + Math.max(displayWidth(supText), displayWidth(subText))
   const last = base.lines.length - 1
   const lines = base.lines.map((line, row) => {
     const script = row === 0 ? supText : row === last ? subText : ''
@@ -398,7 +410,7 @@ function fence(open: string, box: Box, close: string): Box {
 }
 
 function layoutGrid(env: string, rows: MathsRows): Box {
-  const isAligned = !ENVIRONMENT_FENCES.has(env)
+  const isAligned = !ENVIRONMENT_FENCES.has(env) && !CENTRED_ENVIRONMENTS.has(env)
   const cells = rows.map(row =>
     row.map((cell, column) => layoutList(isAligned && column % 2 === 1 ? anchorLeadingOperator(cell) : cell, false)),
   )
@@ -439,6 +451,9 @@ function cellSide(env: string, isAligned: boolean, column: number): 'left' | 'ri
   if (isAligned) return column % 2 === 0 ? 'right' : 'left'
   return env.includes('cases') ? 'left' : 'centre'
 }
+
+// Environments whose rows are each centred rather than aligned on `&`.
+const CENTRED_ENVIRONMENTS = new Set(['gather', 'gather*', 'gathered', 'multline', 'multline*', 'equation', 'equation*'])
 
 function alignCell(cell: Box, width: number, side: 'left' | 'right' | 'centre'): Box {
   const spare = width - cell.width
