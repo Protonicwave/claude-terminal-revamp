@@ -37,7 +37,7 @@ def full_payload(directory: Path) -> dict:
     }
 
 
-def run(monkeypatch, capsys, stdin, columns=None) -> str:
+def run(monkeypatch, capsys, stdin) -> str:
     """Run main() in-process with `stdin` (object, str or bytes) and return stdout."""
     if isinstance(stdin, bytes):
         data = stdin
@@ -46,10 +46,6 @@ def run(monkeypatch, capsys, stdin, columns=None) -> str:
     else:
         data = json.dumps(stdin).encode("utf-8")
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
-    if columns is None:
-        monkeypatch.delenv("COLUMNS", raising=False)
-    else:
-        monkeypatch.setenv("COLUMNS", columns)
     assert statusline.main() == 0
     return capsys.readouterr().out
 
@@ -96,33 +92,30 @@ def without(payload: dict, path: str) -> dict:
     return edited(payload, path, null=False)
 
 
-def test_full_json_prints_both_lines(monkeypatch, capsys, clean_repo):
+def test_full_json_prints_one_line(monkeypatch, capsys, clean_repo):
     output = run(monkeypatch, capsys, full_payload(clean_repo))
-    first, second = plain(output).splitlines()
-    assert first == "◆ Opus high  │  project  │  main  │  Explanatory"
-    assert second == (
-        "━━━━────── 42% of 200k"
-        " · $0.84 · +120 −8 · 5h 37%"
-    )
+    assert plain(output) == "◆ Opus high  │  project  │  main  │  +120 −8  │  Explanatory\n"
 
 
-def test_every_line_ends_with_reset_and_uses_truecolour(monkeypatch, capsys, clean_repo):
-    lines = run(monkeypatch, capsys, full_payload(clean_repo)).splitlines()
-    assert len(lines) == 2
-    assert all(line.endswith(statusline.RESET) for line in lines)
-    assert lines[0].startswith("\x1b[38;2;217;119;87m◆")
+def test_context_cost_and_five_hour_figures_are_not_shown(monkeypatch, capsys, clean_repo):
+    output = plain(run(monkeypatch, capsys, full_payload(clean_repo)))
+    assert "%" not in output
+    assert "$" not in output
+    assert "━" not in output
+
+
+def test_line_ends_with_reset_and_uses_truecolour(monkeypatch, capsys, clean_repo):
+    line = run(monkeypatch, capsys, full_payload(clean_repo)).removesuffix("\n")
+    assert line.endswith(statusline.RESET)
+    assert line.startswith("\x1b[38;2;217;119;87m◆")
 
 
 MISSING_FIELDS = [
     "model.display_name",
     "effort.level",
     "output_style.name",
-    "cost.total_cost_usd",
     "cost.total_lines_added",
     "cost.total_lines_removed",
-    "context_window.used_percentage",
-    "context_window.context_window_size",
-    "rate_limits.five_hour",
 ]
 
 
@@ -145,24 +138,6 @@ def test_missing_effort_drops_only_the_effort(monkeypatch, capsys, clean_repo):
     assert plain(output).startswith("◆ Opus  │  project")
 
 
-def test_missing_cost_drops_only_the_cost(monkeypatch, capsys, clean_repo):
-    output = run(monkeypatch, capsys, without(full_payload(clean_repo), "cost.total_cost_usd"))
-    assert plain(output).splitlines()[1].endswith("42% of 200k · +120 −8 · 5h 37%")
-
-
-def test_missing_context_size_keeps_percentage(monkeypatch, capsys, clean_repo):
-    payload = without(full_payload(clean_repo), "context_window.context_window_size")
-    second = plain(run(monkeypatch, capsys, payload)).splitlines()[1]
-    assert second.startswith("━━━━────── 42% ·")
-
-
-def test_missing_context_percentage_drops_the_bar(monkeypatch, capsys, clean_repo):
-    payload = without(full_payload(clean_repo), "context_window.used_percentage")
-    assert plain(run(monkeypatch, capsys, payload)).splitlines()[1] == (
-        "$0.84 · +120 −8 · 5h 37%"
-    )
-
-
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
@@ -172,22 +147,20 @@ def test_missing_context_percentage_drops_the_bar(monkeypatch, capsys, clean_rep
 )
 def test_one_missing_line_count_counts_as_zero(monkeypatch, capsys, clean_repo, path, expected):
     payload = without(full_payload(clean_repo), path)
-    assert expected in plain(run(monkeypatch, capsys, payload)).splitlines()[1]
+    assert f"main  │  {expected}  │  Explanatory" in plain(run(monkeypatch, capsys, payload))
 
 
 def test_both_line_counts_zero_omits_the_segment(monkeypatch, capsys, clean_repo):
     payload = full_payload(clean_repo)
     payload["cost"]["total_lines_added"] = 0
     payload["cost"]["total_lines_removed"] = 0
-    second = plain(run(monkeypatch, capsys, payload)).splitlines()[1]
-    assert "+" not in second
-    assert second.endswith("$0.84 · 5h 37%")
+    assert plain(run(monkeypatch, capsys, payload)).endswith("main  │  Explanatory\n")
 
 
 def test_missing_directory_omits_folder_and_git(monkeypatch, capsys, clean_repo):
     payload = without(without(full_payload(clean_repo), "workspace.current_dir"), "cwd")
     assert plain(run(monkeypatch, capsys, payload)).splitlines()[0] == (
-        "◆ Opus high  │  Explanatory"
+        "◆ Opus high  │  +120 −8  │  Explanatory"
     )
 
 
@@ -199,10 +172,10 @@ def test_cwd_is_used_when_workspace_directory_is_missing(monkeypatch, capsys, cl
 def test_default_output_style_is_hidden(monkeypatch, capsys, clean_repo):
     payload = full_payload(clean_repo)
     payload["output_style"]["name"] = "default"
-    assert plain(run(monkeypatch, capsys, payload)).splitlines()[0].endswith("main")
+    assert plain(run(monkeypatch, capsys, payload)).splitlines()[0].endswith("main  │  +120 −8")
 
 
-def test_no_line_two_data_prints_line_one_only(monkeypatch, capsys):
+def test_model_alone_prints_the_model(monkeypatch, capsys):
     output = run(monkeypatch, capsys, {"model": {"display_name": "Opus"}})
     assert plain(output) == "◆ Opus\n"
 
@@ -218,46 +191,6 @@ def test_non_numeric_values_are_ignored(monkeypatch, capsys):
         "rate_limits": {"five_hour": {"used_percentage": False}},
     }
     assert plain(run(monkeypatch, capsys, payload)) == "◆ Claude\n"
-
-
-@pytest.mark.parametrize("five_hour", [{"resets_at": 5}, "soon", None, [], {"utilization": "x"}])
-def test_five_hour_without_a_numeric_percentage_is_skipped(monkeypatch, capsys, five_hour):
-    payload = {"cost": {"total_cost_usd": 1}, "rate_limits": {"five_hour": five_hour}}
-    assert plain(run(monkeypatch, capsys, payload)) == "◆ Claude\n$1.00\n"
-
-
-@pytest.mark.parametrize("key", ["used_percentage", "used_percent", "utilization"])
-def test_five_hour_percentage_keys(monkeypatch, capsys, key):
-    payload = {"rate_limits": {"five_hour": {key: 12.4}}}
-    assert plain(run(monkeypatch, capsys, payload)) == "◆ Claude\n5h 12%\n"
-
-
-@pytest.mark.parametrize(
-    ("percent", "colour", "filled"),
-    [
-        (0, statusline.ACCENT, 0),
-        (59, statusline.ACCENT, 6),
-        (60, statusline.AMBER, 6),
-        (85, statusline.AMBER, 9),
-        (86, statusline.RED, 9),
-        (100, statusline.RED, 10),
-        (250, statusline.RED, 10),
-        (-5, statusline.ACCENT, 0),
-    ],
-)
-def test_context_bar_colour_and_fill(monkeypatch, capsys, percent, colour, filled):
-    payload = {"context_window": {"used_percentage": percent}}
-    second = run(monkeypatch, capsys, payload).splitlines()[1]
-    assert second.startswith(colour + "━" * filled)
-    assert plain(second).count("─") == 10 - filled
-
-
-@pytest.mark.parametrize(
-    ("size", "label"), [(200000, "200k"), (1000000, "1M"), (128000, "128k"), (500, "500")]
-)
-def test_context_size_labels(monkeypatch, capsys, size, label):
-    payload = {"context_window": {"used_percentage": 10, "context_window_size": size}}
-    assert plain(run(monkeypatch, capsys, payload)).splitlines()[1].endswith(f"10% of {label}")
 
 
 def test_no_repository_omits_git_segment(monkeypatch, capsys, tmp_path):
@@ -311,18 +244,6 @@ def test_git_takes_no_index_lock_and_has_a_timeout(monkeypatch, capsys, clean_re
         "git", "--no-optional-locks", "-C", str(clean_repo), "status", "--porcelain=v2", "--branch"
     ]
     assert calls == [(command, 0.5)]
-
-
-@pytest.mark.parametrize(("columns", "line_count"), [("59", 1), ("0", 1), ("60", 2), ("200", 2)])
-def test_columns_below_sixty_prints_line_one_only(monkeypatch, capsys, columns, line_count):
-    payload = {"cost": {"total_cost_usd": 1}}
-    assert len(run(monkeypatch, capsys, payload, columns=columns).splitlines()) == line_count
-
-
-@pytest.mark.parametrize("columns", ["", "wide", " 80 "])
-def test_unusable_or_wide_columns_keep_line_two(monkeypatch, capsys, columns):
-    payload = {"cost": {"total_cost_usd": 1}}
-    assert len(run(monkeypatch, capsys, payload, columns=columns).splitlines()) == 2
 
 
 @pytest.mark.parametrize(
